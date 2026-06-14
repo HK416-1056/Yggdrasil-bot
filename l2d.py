@@ -28,7 +28,7 @@ def callback():
         abort(400)
     return 'OK'
 
-@app.handler(MessageEvent, message=TextMessage)
+@handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     # 🎯 核心功能：印出群組 ID
     if event.source.type == 'group':
