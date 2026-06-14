@@ -1,0 +1,17 @@
+[[source]]
+url = "https://pypi.python.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+line-bot-sdk = "*"
+flask = "*"
+gunicorn = "*"
+"discord.py" = "*"
+requests = "*"
+lotify = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.8"
