@@ -3,14 +3,16 @@ import discord
 from linebot import LineBotApi
 from linebot.models import TextSendMessage
 
-# 1. 從環境變數讀取金鑰 (統一與 Render 設定的名稱 100% 一致)
+# 1. 從環境變數讀取金鑰 (這裡的名稱已完全對齊 Render 上的設定)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 LINE_ACCESS_TOKEN = os.getenv("LINEBOT_ACCESS_TOKEN")
 LINE_GROUP_ID = os.getenv("LINE_GROUP_ID")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 
+# 2. 初始化 LINE 官方 API
 line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
 
+# 3. 初始化 Discord 機器人 (啟用讀取訊息意圖)
 intents = discord.Intents.default()
 intents.message_content = True 
 client = discord.Client(intents=intents)
@@ -21,7 +23,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    # 排除機器人自己與 Webhook 的訊息，防止無限迴圈
+    # 排除機器人自己與 Webhook 發送的訊息，防止無限迴圈洗版
     if message.author == client.user or message.webhook_id is not None:
         return
 
@@ -37,7 +39,7 @@ async def on_message(message):
         formatted_message += "\n(發送了附件，請至 Discord 查看)"
 
     try:
-        # 使用官方 Messaging API 主動推播至 LINE 群組
+        # 使用官方 Messaging API 主動推播 (Push Message) 至指定群組
         line_bot_api.push_message(
             LINE_GROUP_ID,
             TextSendMessage(text=formatted_message)
@@ -49,6 +51,6 @@ async def on_message(message):
 # 啟動 Discord 機器人服務
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("【系統錯誤】找不到 DISCORD_TOKEN 環境變數")
+        print("【系統錯誤】找不到 DISCORD_TOKEN 環境變數，請檢查 Render 設定。")
     else:
         client.run(DISCORD_TOKEN)
