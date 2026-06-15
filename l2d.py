@@ -3,7 +3,7 @@ import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
@@ -13,10 +13,6 @@ DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 
 line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
-
-@app.route("/", methods=['GET'])
-def home():
-    return "伺服器正常運作中！", 200
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -30,40 +26,31 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    # --- 全面診斷區塊：強制印出所有 ID ---
-    print(f"\n[DEBUG] 收到訊息!")
-    print(f"訊息來源類型: {event.source.type}")
-    print(f"Sender ID (User): {event.source.sender_id}")
-    if hasattr(event.source, 'group_id'):
-        print(f"🎉 發現群組 ID (group_id): {event.source.group_id}")
-    if hasattr(event.source, 'room_id'):
-        print(f"🎉 發現房間 ID (room_id): {event.source.room_id}")
-    print(f"=====================================\n")
-    # ------------------------------------
-    
-    # 取得使用者名稱並轉發到 Discord
-    user_name = "LINE 使用者"
+    # 【自動偵測與自首功能】
+    if event.source.type == 'group':
+        group_id = event.source.group_id
+        # 若發現訊息進來但還沒設定過 ID，機器人會直接告訴你它看到了什麼
+        print(f"\n>>> 偵測到群組 ID: {group_id} <<<\n")
+        
+        # 如果你還沒設定 LINE_GROUP_ID，這行會把 ID 傳回 LINE 給你看
+        if not os.getenv("LINE_GROUP_ID"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"你的群組 ID 是: {group_id} \n請將此 ID 填入 Render 的 LINE_GROUP_ID 環境變數中！")
+            )
+
+    # 轉發到 Discord
     try:
-        if event.source.type == 'group':
-            profile = line_bot_api.get_group_member_profile(event.source.group_id, event.source.sender_id)
-            user_name = profile.display_name
-        elif event.source.type == 'room':
-            profile = line_bot_api.get_room_member_profile(event.source.room_id, event.source.sender_id)
-            user_name = profile.display_name
-        else:
-            profile = line_bot_api.get_profile(event.source.sender_id)
-            user_name = profile.display_name
-    except Exception as e:
-        print(f"取得名稱失敗 (這不影響轉發): {e}")
+        profile = line_bot_api.get_group_member_profile(event.source.group_id, event.source.user_id) if event.source.type == 'group' else line_bot_api.get_profile(event.source.user_id)
+        user_name = profile.display_name
+    except:
+        user_name = "LINE 使用者"
 
     if DISCORD_WEBHOOK:
-        data = {
+        requests.post(DISCORD_WEBHOOK, json={
             "content": event.message.text,
             "username": f"{user_name} (LINE)"
-        }
-        res = requests.post(DISCORD_WEBHOOK, json=data)
-        print(f"Discord 轉發狀態: {res.status_code}")
+        })
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
