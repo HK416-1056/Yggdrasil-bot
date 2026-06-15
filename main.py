@@ -12,7 +12,6 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 app = Flask(__name__)
 
 # --- 設定 ---
-# 確保環境變數已正確在 Render 設定中填寫
 configuration = Configuration(access_token=os.getenv("LINEBOT_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINEBOT_SECRET"))
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
@@ -28,7 +27,6 @@ discord_client = discord.Client(intents=intents)
 async def on_message(message):
     if message.author == discord_client.user: return
     try:
-        # 使用 v3 SDK 發送訊息
         with ApiClient(configuration) as api_client:
             line_api = MessagingApi(api_client)
             line_api.push_message(PushMessageRequest(
@@ -56,22 +54,23 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     if DISCORD_WEBHOOK:
-        # 簡單轉發至 Discord
         requests.post(DISCORD_WEBHOOK, json={
             "content": event.message.text, 
             "username": "LINE User"
         })
 
-# --- 啟動機制 ---
+# --- 啟動核心 ---
 def run_discord():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     discord_client.run(DISCORD_TOKEN)
 
-# 為了與 Gunicorn 和直接執行兼容
-if __name__ == "__main__":
-    # 啟動 Discord 線程
+# 這裡是關鍵：將線程啟動從 Flask app 邏輯中分離出來
+# 這樣無論是用 Gunicorn 還是直接執行，都不會重複啟動機器人
+if not hasattr(app, 'discord_started'):
     threading.Thread(target=run_discord, daemon=True).start()
-    # 啟動 Flask
+    app.discord_started = True
+
+if __name__ == "__main__":
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
