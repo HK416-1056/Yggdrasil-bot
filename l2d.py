@@ -7,6 +7,7 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
+# 環境變數設定
 LINE_ACCESS_TOKEN = os.getenv("LINEBOT_ACCESS_TOKEN")
 LINE_SECRET = os.getenv("LINEBOT_SECRET")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
@@ -26,18 +27,16 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    # --- 自動抓取 ID 並回傳給 LINE ---
-    if event.source.type == 'group':
+    # 1. 偵測 ID 並回傳給 LINE (防止 ID 未知導致無法轉發)
+    if event.source.type == 'group' and not os.getenv("LINE_GROUP_ID"):
         group_id = event.source.group_id
-        # 若機器人發現這是一個群組，且我們還沒設定 LINE_GROUP_ID，它會主動回傳 ID
-        if not os.getenv("LINE_GROUP_ID"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"偵測到群組 ID: {group_id} \n請將此 ID 填入 Render 的 LINE_GROUP_ID 環境變數中！")
-            )
-            return # 回傳後結束，避免重複 Token 錯誤
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=f"偵測到群組 ID: {group_id} \n請將此 ID 填入 Render 的 LINE_GROUP_ID 環境變數中！")
+        )
+        return
 
-    # --- 原本的轉發邏輯 ---
+    # 2. 獲取使用者名稱
     try:
         if event.source.type == 'group':
             profile = line_bot_api.get_group_member_profile(event.source.group_id, event.source.user_id)
@@ -47,11 +46,16 @@ def handle_message(event):
     except:
         user_name = "LINE 使用者"
 
+    # 3. 轉發到 Discord 並紀錄狀態
     if DISCORD_WEBHOOK:
-        requests.post(DISCORD_WEBHOOK, json={
-            "content": event.message.text,
-            "username": f"{user_name} (LINE)"
-        })
+        try:
+            payload = {"content": event.message.text, "username": f"{user_name} (LINE)"}
+            res = requests.post(DISCORD_WEBHOOK, json=payload, timeout=5)
+            print(f"DEBUG: Discord Webhook 狀態碼: {res.status_code}")
+        except Exception as e:
+            print(f"DEBUG: Discord 發送錯誤: {e}")
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # 強制綁定 0.0.0.0 以適應 Render 的外網請求
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
