@@ -30,11 +30,13 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    # 🎯 核心功能：印出群組 ID
+    # --- 診斷用區塊，用來抓取群組 ID ---
+    print(f"收到 LINE 訊息類型: {event.source.type}")
     if event.source.type == 'group':
         print(f"\n=====================================")
         print(f"🎉 成功抓到群組 ID: {event.source.group_id}")
         print(f"=====================================\n")
+    # --------------------------------
     
     # 取得使用者名稱並轉發到 Discord Webhook
     try:
@@ -43,7 +45,8 @@ def handle_message(event):
         else:
             profile = line_bot_api.get_profile(event.source.user_id)
         user_name = profile.display_name
-    except:
+    except Exception as e:
+        print(f"取得名稱失敗: {e}")
         user_name = "LINE 使用者"
 
     if DISCORD_WEBHOOK:
