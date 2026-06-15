@@ -26,6 +26,11 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+# 只要發送訊息，就自動將 ID 回傳給你
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=f"偵測來源: {event.source.type}\nID: {getattr(event.source, 'group_id', '無群組ID')}")
+    )
     # 【自動偵測與自首功能】
     if event.source.type == 'group':
         group_id = event.source.group_id
