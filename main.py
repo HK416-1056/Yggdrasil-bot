@@ -12,7 +12,8 @@ from linebot.v3.messaging import (
     MessagingApi, 
     MessagingApiBlob, 
     PushMessageRequest, 
-    TextMessage as LineTextMessage
+    TextMessage as LineTextMessage,
+    ImageMessage as LineImageMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
 
@@ -36,32 +37,47 @@ async def on_ready():
 
 @discord_client.event
 async def on_message(message):
-    # 1. 忽略機器人自己的訊息
-    if message.author == discord_client.user: return
+    # 1. 終極防護：忽略機器人自己，以及「Webhook 發送的訊息」
+    if message.author.bot or message.webhook_id: 
+        return
     
-    # 2. 關掉私訊，只接受群組(伺服器)訊息
-    if not message.guild: return 
+    # 2. 徹底阻擋私訊：只允許來自伺服器 (Guild) 的訊息
+    if not message.guild: 
+        return 
 
     print(f"DEBUG: 偵測到 Discord 伺服器訊息! 內容: {message.content}")
 
-    # 組合文字與圖片附件網址
-    text = f"[{message.author.display_name}]: {message.content}"
-    if message.attachments:
-        for att in message.attachments:
-            text += f"\n[附件圖片/檔案]: {att.url}"
+    messages_to_send = []
+    
+    # 處理文字
+    if message.content:
+        messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}]: {message.content}"))
+    elif not message.content and message.attachments:
+        messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}] 傳送了圖片/附件:"))
 
-    # 避免只有傳圖片沒有文字時，第一行多出空白的 []
-    if not message.content and message.attachments:
-        text = f"[{message.author.display_name}] 傳送了圖片/附件:"
-        for att in message.attachments:
-            text += f"\n{att.url}"
+    # 處理圖片與附件轉發給 LINE
+    for att in message.attachments:
+        # 如果是圖片，使用 LINE 的原生圖片格式顯示
+        if att.content_type and att.content_type.startswith('image/'):
+            messages_to_send.append(LineImageMessage(
+                original_content_url=att.url,
+                preview_image_url=att.url
+            ))
+        else:
+            # 如果是一般檔案，傳送網址
+            messages_to_send.append(LineTextMessage(text=f"[附件]: {att.url}"))
+
+    # LINE 限制一次 API 呼叫最多只能推播 5 個對話泡泡
+    if not messages_to_send:
+        return
+    messages_to_send = messages_to_send[:5]
 
     try:
         with ApiClient(configuration) as api_client:
             line_api = MessagingApi(api_client)
             line_api.push_message(PushMessageRequest(
                 to=LINE_GROUP_ID, 
-                messages=[LineTextMessage(text=text)]
+                messages=messages_to_send
             ))
             print("DEBUG: 成功轉發至 LINE!")
     except Exception as e:
@@ -82,18 +98,17 @@ def callback():
         abort(400)
     return 'OK'
 
-# 同時處理文字與圖片訊息
+# 同時接收文字與圖片事件
 @handler.add(MessageEvent, message=(TextMessageContent, ImageMessageContent))
 def handle_message(event):
-    # 1. 關掉私訊，只處理來自「群組 (group)」的訊息
+    # 1. 徹底阻擋 LINE 私訊：只允許群組 (group)
     if getattr(event.source, 'type', None) != 'group':
-        print("DEBUG: 收到 LINE 私訊，已忽略。")
+        print(f"DEBUG: 收到 LINE 的 {getattr(event.source, 'type', 'unknown')} 訊息 (非群組)，已成功阻擋。")
         return
     
     group_id = event.source.group_id
     user_id = event.source.user_id
     
-    # 💡 抓取群組 ID 的關鍵：將這串 C 開頭的代碼複製到 Render 的 LINE_GROUP_ID 變數中
     print(f"DEBUG: 收到 LINE 群組訊息! 該群組的 ID 是: {group_id}")
 
     if not DISCORD_WEBHOOK:
@@ -107,9 +122,9 @@ def handle_message(event):
             profile = line_api.get_group_member_profile(group_id, user_id)
             user_name = profile.display_name
     except Exception as e:
-        print(f"DEBUG: 獲取 LINE 用戶名稱失敗: {e}")
+        pass # 忽略獲取名字失敗的錯誤
 
-    # 如果是文字訊息
+    # 若為文字訊息
     if isinstance(event.message, TextMessageContent):
         requests.post(DISCORD_WEBHOOK, json={
             "content": event.message.text, 
@@ -117,15 +132,16 @@ def handle_message(event):
         })
         print("DEBUG: LINE 文字成功轉發至 Discord")
 
-    # 如果是圖片訊息
+    # 若為圖片訊息
     elif isinstance(event.message, ImageMessageContent):
         try:
+            print("DEBUG: 準備下載 LINE 圖片...")
             with ApiClient(configuration) as api_client:
                 blob_api = MessagingApiBlob(api_client)
-                # 取得圖片的二進位資料
+                # 從 LINE 伺服器獲取圖片二進位資料
                 image_data = blob_api.get_message_content(event.message.id)
                 
-                # 透過 multipart/form-data 上傳至 Discord Webhook
+                # 透過表單格式上傳至 Discord Webhook
                 files = {
                     "file": ("image.jpg", image_data, "image/jpeg")
                 }
