@@ -3,8 +3,6 @@ import threading
 import asyncio
 import discord
 import requests
-import signal
-import sys
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -14,6 +12,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 app = Flask(__name__)
 
 # --- 設定 ---
+# 確保環境變數已正確在 Render 設定中填寫
 configuration = Configuration(access_token=os.getenv("LINEBOT_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINEBOT_SECRET"))
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
@@ -29,9 +28,13 @@ discord_client = discord.Client(intents=intents)
 async def on_message(message):
     if message.author == discord_client.user: return
     try:
+        # 使用 v3 SDK 發送訊息
         with ApiClient(configuration) as api_client:
             line_api = MessagingApi(api_client)
-            line_api.push_message(PushMessageRequest(to=LINE_GROUP_ID, messages=[LineTextMessage(text=f"[{message.author.display_name}]: {message.content}")]))
+            line_api.push_message(PushMessageRequest(
+                to=LINE_GROUP_ID, 
+                messages=[LineTextMessage(text=f"[{message.author.display_name}]: {message.content}")]
+            ))
     except Exception as e:
         print(f"Discord 轉 LINE 錯誤: {e}")
 
@@ -53,21 +56,22 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     if DISCORD_WEBHOOK:
-        requests.post(DISCORD_WEBHOOK, json={"content": event.message.text, "username": "LINE User"})
+        # 簡單轉發至 Discord
+        requests.post(DISCORD_WEBHOOK, json={
+            "content": event.message.text, 
+            "username": "LINE User"
+        })
 
 # --- 啟動機制 ---
 def run_discord():
-    # 確保 Discord 運行在獨立的迴圈
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     discord_client.run(DISCORD_TOKEN)
 
+# 為了與 Gunicorn 和直接執行兼容
 if __name__ == "__main__":
-    # 使用線程啟動 Discord，並設置為守護線程
-    t = threading.Thread(target=run_discord)
-    t.daemon = True
-    t.start()
-    
-    # 啟動 Flask，使用 Gunicorn 以外的直接運行方式
+    # 啟動 Discord 線程
+    threading.Thread(target=run_discord, daemon=True).start()
+    # 啟動 Flask
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
