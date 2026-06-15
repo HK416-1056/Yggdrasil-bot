@@ -23,18 +23,36 @@ intents = discord.Intents.default()
 intents.message_content = True 
 discord_client = discord.Client(intents=intents)
 
+# 新增：監視機器人是否真的成功登入並看到伺服器
+@discord_client.event
+async def on_ready():
+    print(f"DEBUG: 機器人已成功連線，帳號: {discord_client.user}")
+    for guild in discord_client.guilds:
+        print(f"DEBUG: 機器人所在的伺服器: {guild.name}")
+
 @discord_client.event
 async def on_message(message):
+    # 新增：監視是否真的有「聽到」頻道內的講話
+    print(f"DEBUG: 偵測到 Discord 訊息! 內容: {message.content} 來自: {message.author}")
+    
     if message.author == discord_client.user: return
+    
+    # 組合文字與圖片附件網址
+    text = f"[{message.author.display_name}]: {message.content}"
+    if message.attachments:
+        for att in message.attachments:
+            text += f"\n[附件圖片/檔案]: {att.url}"
+
     try:
         with ApiClient(configuration) as api_client:
             line_api = MessagingApi(api_client)
             line_api.push_message(PushMessageRequest(
                 to=LINE_GROUP_ID, 
-                messages=[LineTextMessage(text=f"[{message.author.display_name}]: {message.content}")]
+                messages=[LineTextMessage(text=text)]
             ))
+            print("DEBUG: 成功轉發至 LINE!")
     except Exception as e:
-        print(f"Discord 轉 LINE 錯誤: {e}")
+        print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
 
 # --- Flask ---
 @app.route("/", methods=['GET'])
@@ -66,7 +84,6 @@ def run_discord():
     discord_client.run(DISCORD_TOKEN)
 
 # 這裡是關鍵：將線程啟動從 Flask app 邏輯中分離出來
-# 這樣無論是用 Gunicorn 還是直接執行，都不會重複啟動機器人
 if not hasattr(app, 'discord_started'):
     threading.Thread(target=run_discord, daemon=True).start()
     app.discord_started = True
