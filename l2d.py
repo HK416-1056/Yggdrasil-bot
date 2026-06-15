@@ -27,7 +27,7 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    # 1. 偵測 ID 並回傳給 LINE (防止 ID 未知導致無法轉發)
+    # 1. 偵測 ID 並回傳給 LINE
     if event.source.type == 'group' and not os.getenv("LINE_GROUP_ID"):
         group_id = event.source.group_id
         line_bot_api.reply_message(
@@ -46,7 +46,7 @@ def handle_message(event):
     except:
         user_name = "LINE 使用者"
 
-    # 3. 轉發到 Discord 並紀錄狀態
+    # 3. 轉發到 Discord
     if DISCORD_WEBHOOK:
         try:
             payload = {"content": event.message.text, "username": f"{user_name} (LINE)"}
@@ -56,6 +56,6 @@ def handle_message(event):
             print(f"DEBUG: Discord 發送錯誤: {e}")
 
 if __name__ == "__main__":
-    # 強制綁定 0.0.0.0 以適應 Render 的外網請求
+    # 合併後的唯一入口，綁定 0.0.0.0 並使用 Render 提供的 PORT
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
