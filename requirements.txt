@@ -1,4 +1,5 @@
-discord.py>=2.3.2
-line-bot-sdk>=3.6.0
-Flask>=3.0.0
-requests>=2.31.0
+Flask
+discord.py
+requests
+line-bot-sdk
+gunicorn
