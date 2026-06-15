@@ -25,6 +25,7 @@ handler = WebhookHandler(os.getenv("LINEBOT_SECRET"))
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 LINE_GROUP_ID = os.getenv("LINE_GROUP_ID")
+MESSAGE_CHANNEL_ID = os.getenv("MESSAGE_CHANNEL_ID")  # 新增項目：指定轉發的 Discord 頻道 ID
 
 # --- Discord ---
 intents = discord.Intents.default()
@@ -37,19 +38,29 @@ async def on_ready():
 
 @discord_client.event
 async def on_message(message):
+    # 1. 忽略機器人自己與 Webhook 發送的訊息
     if message.author.bot or message.webhook_id: 
         return
     
+    # 2. 徹底阻擋 Discord 私訊：只允許來自伺服器的訊息
     if not message.guild: 
         return 
 
+    # 3. 指定頻道過濾：若有設定特定頻道 ID，則只轉發該頻道的訊息，其餘頻道直接忽略
+    if MESSAGE_CHANNEL_ID and str(message.channel.id) != MESSAGE_CHANNEL_ID:
+        return
+
+    print(f"DEBUG: 偵測到指定 Discord 頻道訊息! 內容: {message.content}")
+
     messages_to_send = []
     
+    # 處理文字
     if message.content:
         messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}]: {message.content}"))
     elif not message.content and message.attachments:
         messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}] 傳送了圖片/附件:"))
 
+    # 處理圖片與附件轉發給 LINE
     for att in message.attachments:
         if att.content_type and att.content_type.startswith('image/'):
             messages_to_send.append(LineImageMessage(
@@ -70,11 +81,12 @@ async def on_message(message):
                 to=LINE_GROUP_ID, 
                 messages=messages_to_send
             ))
+            print("DEBUG: 成功轉發至 LINE 目標對象!")
     except Exception as e:
         print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
 
 
-# --- 獨立的背景處理函數 (解決延遲與 1 分鐘重試問題) ---
+# --- 獨立的背景處理函數 (解決 LINE 圖片重複傳送與延遲問題) ---
 def forward_text_to_discord(text, user_name):
     requests.post(DISCORD_WEBHOOK, json={
         "content": text, 
@@ -112,8 +124,9 @@ def callback():
 
 @handler.add(MessageEvent, message=(TextMessageContent, ImageMessageContent))
 def handle_message(event):
-    # 徹底阻擋 LINE 私訊
+    # 徹底阻擋 LINE 私訊：只允許群組 (group)
     if getattr(event.source, 'type', None) != 'group':
+        print(f"DEBUG: 收到 LINE 非群組訊息，已成功濾除。")
         return
     
     group_id = event.source.group_id
@@ -122,7 +135,6 @@ def handle_message(event):
     if not DISCORD_WEBHOOK:
         return
 
-    # 取得名稱
     user_name = "LINE 使用者"
     try:
         with ApiClient(configuration) as api_client:
@@ -132,7 +144,7 @@ def handle_message(event):
     except Exception:
         pass 
 
-    # 使用 threading 將耗時任務丟到背景，讓 Flask 立刻回傳 200 給 LINE
+    # 使用執行緒將轉發任務丟到背景，讓 Flask 能在秒級內回覆 LINE 200 OK，徹底阻斷重複發送機制
     if isinstance(event.message, TextMessageContent):
         threading.Thread(target=forward_text_to_discord, args=(event.message.text, user_name), daemon=True).start()
 
