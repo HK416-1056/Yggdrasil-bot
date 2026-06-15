@@ -26,27 +26,22 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-# 只要發送訊息，就自動將 ID 回傳給你
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=f"偵測來源: {event.source.type}\nID: {getattr(event.source, 'group_id', '無群組ID')}")
-    )
-    # 【自動偵測與自首功能】
-    if event.source.type == 'group':
+    # 1. 偵測與回傳 ID (僅在尚未設定 LINE_GROUP_ID 時回應給 LINE)
+    if event.source.type == 'group' and not os.getenv("LINE_GROUP_ID"):
         group_id = event.source.group_id
-        # 若發現訊息進來但還沒設定過 ID，機器人會直接告訴你它看到了什麼
         print(f"\n>>> 偵測到群組 ID: {group_id} <<<\n")
-        
-        # 如果你還沒設定 LINE_GROUP_ID，這行會把 ID 傳回 LINE 給你看
-        if not os.getenv("LINE_GROUP_ID"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"你的群組 ID 是: {group_id} \n請將此 ID 填入 Render 的 LINE_GROUP_ID 環境變數中！")
-            )
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=f"你的群組 ID 是: {group_id} \n請將此 ID 填入 Render 的 LINE_GROUP_ID 環境變數中！")
+        )
+        return # 回應過後直接結束，避免重複 Token 錯誤
 
-    # 轉發到 Discord
+    # 2. 轉發到 Discord
     try:
-        profile = line_bot_api.get_group_member_profile(event.source.group_id, event.source.user_id) if event.source.type == 'group' else line_bot_api.get_profile(event.source.user_id)
+        if event.source.type == 'group':
+            profile = line_bot_api.get_group_member_profile(event.source.group_id, event.source.user_id)
+        else:
+            profile = line_bot_api.get_profile(event.source.user_id)
         user_name = profile.display_name
     except:
         user_name = "LINE 使用者"
