@@ -15,7 +15,6 @@ from linebot.v3.messaging import (
     TextMessage as LineTextMessage,
     ImageMessage as LineImageMessage
 )
-# 新增：匯入 FileMessageContent 
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
 
 app = Flask(__name__)
@@ -87,7 +86,7 @@ async def on_message(message):
         print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
 
 
-# --- 獨立的背景處理函數 ---
+# --- 獨立的背景處理函數 (解決 LINE 重複傳送與延遲問題) ---
 def forward_text_to_discord(text, user_name):
     requests.post(DISCORD_WEBHOOK, json={
         "content": text, 
@@ -108,9 +107,8 @@ def forward_image_to_discord(message_id, user_name):
     except Exception as e:
         print(f"DEBUG: [背景] LINE 圖片轉發失敗: {e}")
 
-# 新增：處理一般檔案轉發與大小限制
 def forward_file_to_discord(message_id, file_name, file_size, user_name):
-    # 檢查檔案大小 (25MB = 25 * 1024 * 1024 = 26214400 bytes)
+    # 檢查檔案大小 (25MB = 26214400 bytes)
     MAX_SIZE = 25 * 1024 * 1024
     
     if file_size and file_size > MAX_SIZE:
@@ -135,14 +133,13 @@ def forward_file_to_discord(message_id, file_name, file_size, user_name):
             print(f"DEBUG: 傳送錯誤提示回 LINE 失敗: {e}")
         return
 
-    # 若大小合乎規範，則開始下載並轉發
+    # 下載並轉發檔案
     try:
         print(f"DEBUG: [背景] 準備下載 LINE 檔案 ({file_name})...")
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             file_data = blob_api.get_message_content(message_id)
             
-            # 以免 LINE 沒提供 file_size，下載後做二次檢查
             if len(file_data) > MAX_SIZE:
                 print("DEBUG: [背景] 下載後發現檔案大於 25MB，取消轉發。")
                 return
@@ -154,7 +151,7 @@ def forward_file_to_discord(message_id, file_name, file_size, user_name):
         print(f"DEBUG: [背景] LINE 檔案轉發失敗: {e}")
 
 
-# --- Flask / LINE ---
+# --- Flask / LINE Webhook ---
 @app.route("/", methods=['GET'])
 def health(): return "OK", 200
 
@@ -168,9 +165,11 @@ def callback():
         abort(400)
     return 'OK'
 
-# 修改：將 FileMessageContent 加入監聽名單
 @handler.add(MessageEvent, message=(TextMessageContent, ImageMessageContent, FileMessageContent))
 def handle_message(event):
+    # --- 抓蟲專用 DEBUG 行：印出收到的所有來源與型態 ---
+    print(f"DEBUG: [收訊測試] 來源類型: {getattr(event.source, 'type', 'unknown')}, 訊息類型: {type(event.message)}")
+
     # 徹底阻擋 LINE 私訊：只允許群組 (group)
     if getattr(event.source, 'type', None) != 'group':
         print(f"DEBUG: 收到 LINE 非群組訊息，已成功濾除。")
@@ -180,6 +179,7 @@ def handle_message(event):
     user_id = event.source.user_id
 
     if not DISCORD_WEBHOOK:
+        print("DEBUG: 找不到 DISCORD_WEBHOOK 環境變數，取消轉發。")
         return
 
     user_name = "LINE 使用者"
@@ -191,19 +191,17 @@ def handle_message(event):
     except Exception:
         pass 
 
-    # 使用執行緒將轉發任務丟到背景，讓 Flask 能在秒級內回覆 LINE 200 OK
+    # 依照訊息類型丟到背景處理
     if isinstance(event.message, TextMessageContent):
         threading.Thread(target=forward_text_to_discord, args=(event.message.text, user_name), daemon=True).start()
 
     elif isinstance(event.message, ImageMessageContent):
         threading.Thread(target=forward_image_to_discord, args=(event.message.id, user_name), daemon=True).start()
         
-    # 新增：接收到一般檔案時的處理
     elif isinstance(event.message, FileMessageContent):
         file_name = event.message.file_name
-        file_size = getattr(event.message, 'file_size', None) # 取得檔案大小（bytes）
+        file_size = getattr(event.message, 'file_size', None)
         threading.Thread(target=forward_file_to_discord, args=(event.message.id, file_name, file_size, user_name), daemon=True).start()
-
 
 # --- 啟動核心 ---
 def run_discord():
