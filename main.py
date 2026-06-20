@@ -17,7 +17,6 @@ from linebot.v3.messaging import (
     VideoMessage as LineVideoMessage,   
     AudioMessage as LineAudioMessage    
 )
-# 新增了 VideoMessageContent 和 AudioMessageContent
 from linebot.v3.webhooks import (
     MessageEvent, 
     TextMessageContent, 
@@ -47,7 +46,7 @@ discord_client = discord.Client(intents=intents)
 
 @discord_client.event
 async def on_ready():
-    print(f"DEBUG: Discord 機器人已成功連線，帳號: {discord_client.user}")
+    print(f"DEBUG: Discord 機器人已成功連線，帳號: {discord_client.user}", flush=True)
 
 @discord_client.event
 async def on_message(message):
@@ -58,7 +57,7 @@ async def on_message(message):
     if MESSAGE_CHANNEL_ID and str(message.channel.id) != MESSAGE_CHANNEL_ID:
         return
 
-    print(f"DEBUG: 偵測到指定 Discord 頻道訊息! 內容: {message.content}")
+    print(f"DEBUG: 偵測到指定 Discord 頻道訊息! 內容: {message.content}", flush=True)
     messages_to_send = []
     
     if message.content:
@@ -108,55 +107,64 @@ async def on_message(message):
                 to=LINE_GROUP_ID, 
                 messages=messages_to_send
             ))
-            print("DEBUG: 成功轉發至 LINE 目標對象!")
+            print("DEBUG: 成功轉發至 LINE 目標對象!", flush=True)
     except Exception as e:
         if hasattr(e, 'status') and hasattr(e, 'body'):
-            print(f"❌ [錯誤] LINE API 拒絕了這則訊息！狀態碼: {e.status}")
-            print(f"❌ [錯誤] 詳細原因: {e.body}")
+            print(f"❌ [錯誤] LINE API 拒絕了這則訊息！狀態碼: {e.status}", flush=True)
+            print(f"❌ [錯誤] 詳細原因: {e.body}", flush=True)
         else:
-            print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
+            print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}", flush=True)
 
 
 # --- 獨立的背景處理函數 ---
 def forward_text_to_discord(text, user_name):
     requests.post(DISCORD_WEBHOOK, json={"content": text, "username": f"{user_name} (LINE)"})
-    print("DEBUG: [背景] LINE 文字成功轉發至 Discord")
+    print("DEBUG: [背景] LINE 文字成功轉發至 Discord", flush=True)
 
 def forward_image_to_discord(message_id, user_name):
     try:
+        print("DEBUG: [背景] 準備下載 LINE 圖片...", flush=True)
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             image_data = blob_api.get_message_content(message_id)
             files = {"file": ("image.jpg", image_data, "image/jpeg")}
-            requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)"}, files=files)
-            print("DEBUG: [背景] LINE 圖片成功轉發至 Discord")
+            res = requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)", "content": f"[{user_name}] 傳送了圖片:"}, files=files)
+            if res.status_code in [200, 204]:
+                print("DEBUG: [背景] LINE 圖片成功轉發至 Discord", flush=True)
+            else:
+                print(f"DEBUG: [背景] 圖片轉發失敗，Discord 回應: {res.text}", flush=True)
     except Exception as e:
-        print(f"DEBUG: [背景] LINE 圖片轉發失敗: {e}")
+        print(f"DEBUG: [背景] LINE 圖片轉發異常: {e}", flush=True)
 
-# 新增：專門處理影片的轉發函數
 def forward_video_to_discord(message_id, user_name):
     try:
-        print("DEBUG: [背景] 準備下載 LINE 影片...")
+        print("DEBUG: [背景] 準備下載 LINE 影片...", flush=True)
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             video_data = blob_api.get_message_content(message_id)
             
-            # 檢查是否超過 Discord 25MB 限制
-            if len(video_data) > 25 * 1024 * 1024:
-                error_msg = f"⚠️ [{user_name}] 傳送的影片超過 25MB 限制，無法轉發至 Discord。"
+            video_size = len(video_data)
+            print(f"DEBUG: [背景] 影片下載完成，大小: {video_size} bytes", flush=True)
+
+            if video_size > 25 * 1024 * 1024:
+                error_msg = f"⚠️ [{user_name}] 傳送的影片 ({video_size//1024//1024}MB) 超過 25MB 限制，無法轉發至 Discord。"
                 requests.post(DISCORD_WEBHOOK, json={"content": error_msg, "username": "系統通知"})
+                print(f"DEBUG: [背景] {error_msg}", flush=True)
                 return
 
             files = {"file": ("video.mp4", video_data, "video/mp4")}
-            requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)"}, files=files)
-            print("DEBUG: [背景] LINE 影片成功轉發至 Discord")
+            res = requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)", "content": f"[{user_name}] 傳送了影片:"}, files=files)
+            
+            if res.status_code in [200, 204]:
+                print("DEBUG: [背景] LINE 影片成功轉發至 Discord", flush=True)
+            else:
+                print(f"DEBUG: [背景] 影片轉發失敗，Discord 回應: {res.status_code} - {res.text}", flush=True)
     except Exception as e:
-        print(f"DEBUG: [背景] LINE 影片轉發失敗: {e}")
+        print(f"DEBUG: [背景] LINE 影片轉發異常: {e}", flush=True)
 
-# 新增：專門處理語音的轉發函數
 def forward_audio_to_discord(message_id, user_name):
     try:
-        print("DEBUG: [背景] 準備下載 LINE 語音...")
+        print("DEBUG: [背景] 準備下載 LINE 語音...", flush=True)
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             audio_data = blob_api.get_message_content(message_id)
@@ -165,10 +173,13 @@ def forward_audio_to_discord(message_id, user_name):
                 return
 
             files = {"file": ("audio.m4a", audio_data, "audio/mp4")}
-            requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)"}, files=files)
-            print("DEBUG: [背景] LINE 語音成功轉發至 Discord")
+            res = requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)", "content": f"[{user_name}] 傳送了語音:"}, files=files)
+            if res.status_code in [200, 204]:
+                print("DEBUG: [背景] LINE 語音成功轉發至 Discord", flush=True)
+            else:
+                print(f"DEBUG: [背景] 語音轉發失敗，Discord 回應: {res.text}", flush=True)
     except Exception as e:
-        print(f"DEBUG: [背景] LINE 語音轉發失敗: {e}")
+        print(f"DEBUG: [背景] LINE 語音轉發異常: {e}", flush=True)
 
 def forward_file_to_discord(message_id, file_name, file_size, user_name):
     MAX_SIZE = 25 * 1024 * 1024
@@ -178,7 +189,7 @@ def forward_file_to_discord(message_id, file_name, file_size, user_name):
         return
 
     try:
-        print(f"DEBUG: [背景] 準備下載 LINE 檔案 ({file_name})...")
+        print(f"DEBUG: [背景] 準備下載 LINE 檔案 ({file_name})...", flush=True)
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             file_data = blob_api.get_message_content(message_id)
@@ -187,10 +198,13 @@ def forward_file_to_discord(message_id, file_name, file_size, user_name):
                 return
 
             files = {"file": (file_name, file_data)}
-            requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)"}, files=files)
-            print("DEBUG: [背景] LINE 檔案成功轉發至 Discord")
+            res = requests.post(DISCORD_WEBHOOK, data={"username": f"{user_name} (LINE)", "content": f"[{user_name}] 傳送了檔案:"}, files=files)
+            if res.status_code in [200, 204]:
+                print("DEBUG: [背景] LINE 檔案成功轉發至 Discord", flush=True)
+            else:
+                print(f"DEBUG: [背景] 檔案轉發失敗，Discord 回應: {res.text}", flush=True)
     except Exception as e:
-        print(f"DEBUG: [背景] LINE 檔案轉發失敗: {e}")
+        print(f"DEBUG: [背景] LINE 檔案轉發異常: {e}", flush=True)
 
 
 # --- Flask / LINE Webhook ---
@@ -207,9 +221,10 @@ def callback():
         abort(400)
     return 'OK'
 
-# 這裡也補上了 VideoMessageContent 和 AudioMessageContent
 @handler.add(MessageEvent, message=(TextMessageContent, ImageMessageContent, VideoMessageContent, AudioMessageContent, FileMessageContent))
 def handle_message(event):
+    print(f"DEBUG: [收訊測試] 來源類型: {getattr(event.source, 'type', 'unknown')}, 訊息類型: {type(event.message)}", flush=True)
+
     if getattr(event.source, 'type', None) != 'group':
         return
     
