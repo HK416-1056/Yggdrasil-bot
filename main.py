@@ -5,7 +5,7 @@ import discord
 import requests
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
-from linebot.v3.exceptions import InvalidSignatureError, ApiException  # 新增 ApiException 抓取詳細錯誤
+from linebot.v3.exceptions import InvalidSignatureError  # 已移除 ApiException 以避免載入錯誤
 from linebot.v3.messaging import (
     Configuration, 
     ApiClient, 
@@ -119,12 +119,13 @@ async def on_message(message):
                 messages=messages_to_send
             ))
             print("DEBUG: 成功轉發至 LINE 目標對象!")
-    except ApiException as e:
-        # 特別攔截 LINE API 拒絕的詳細原因
-        print(f"❌ [錯誤] LINE API 拒絕了這則訊息！狀態碼: {e.status}")
-        print(f"❌ [錯誤] 詳細原因: {e.body}")
     except Exception as e:
-        print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
+        # 動態檢查是不是 LINE API 丟出的專屬錯誤 (安全攔截法)
+        if hasattr(e, 'status') and hasattr(e, 'body'):
+            print(f"❌ [錯誤] LINE API 拒絕了這則訊息！狀態碼: {e.status}")
+            print(f"❌ [錯誤] 詳細原因: {e.body}")
+        else:
+            print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
 
 
 # --- 獨立的背景處理函數 ---
