@@ -13,7 +13,9 @@ from linebot.v3.messaging import (
     MessagingApiBlob, 
     PushMessageRequest, 
     TextMessage as LineTextMessage,
-    ImageMessage as LineImageMessage
+    ImageMessage as LineImageMessage,
+    VideoMessage as LineVideoMessage,   # 新增影片訊息模組
+    AudioMessage as LineAudioMessage    # 新增音訊訊息模組
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
 
@@ -26,6 +28,9 @@ DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 LINE_GROUP_ID = os.getenv("LINE_GROUP_ID")
 MESSAGE_CHANNEL_ID = os.getenv("MESSAGE_CHANNEL_ID")  # 指定轉發的 Discord 頻道 ID
+
+# 預設影片預覽圖 (當 Discord 傳送影片時，LINE 需要一張預覽圖)
+DEFAULT_VIDEO_PREVIEW_URL = "https://via.placeholder.com/1024x768.png?text=Video+Preview"
 
 # --- Discord ---
 intents = discord.Intents.default()
@@ -58,20 +63,48 @@ async def on_message(message):
     if message.content:
         messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}]: {message.content}"))
     elif not message.content and message.attachments:
-        messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}] 傳送了圖片/附件:"))
+        messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}] 傳送了附件:"))
 
-    # 處理圖片與附件轉發給 LINE
+    # --- 處理圖片、影片、音訊與一般附件轉發給 LINE ---
     for att in message.attachments:
-        if att.content_type and att.content_type.startswith('image/'):
+        content_type = att.content_type or ""
+
+        # 類型 1: 圖片
+        if content_type.startswith('image/'):
             messages_to_send.append(LineImageMessage(
                 original_content_url=att.url,
                 preview_image_url=att.url
             ))
+            
+        # 類型 2: 影片 (LINE 原生支援 mp4)
+        elif content_type.startswith('video/') and 'mp4' in content_type:
+            messages_to_send.append(LineVideoMessage(
+                original_content_url=att.url,
+                preview_image_url=DEFAULT_VIDEO_PREVIEW_URL
+            ))
+            
+        # 類型 3: 音檔 (LINE 原生支援 m4a，此處盡力轉換)
+        elif content_type.startswith('audio/'):
+            # 嘗試抓取語音訊息長度，若無則預設為 60000 毫秒 (60秒)
+            duration_ms = getattr(att, 'duration_secs', 60) * 1000
+            messages_to_send.append(LineAudioMessage(
+                original_content_url=att.url,
+                duration=int(duration_ms)
+            ))
+            
+        # 類型 4: 一般檔案 (或 LINE 不支援原生播放的影音格式，如 mkv, zip, pdf)
         else:
-            messages_to_send.append(LineTextMessage(text=f"[附件]: {att.url}"))
+            file_message = (
+                f"📁 [附件檔案]: {att.filename}\n"
+                f"🔗 點此下載: {att.url}\n"
+                f"(⚠️ 提醒: Discord 附件連結通常會在 24 小時後失效)"
+            )
+            messages_to_send.append(LineTextMessage(text=file_message))
 
     if not messages_to_send:
         return
+    
+    # LINE API 限制一次最多推播 5 則訊息
     messages_to_send = messages_to_send[:5]
 
     try:
@@ -167,7 +200,6 @@ def callback():
 
 @handler.add(MessageEvent, message=(TextMessageContent, ImageMessageContent, FileMessageContent))
 def handle_message(event):
-    # --- 抓蟲專用 DEBUG 行：印出收到的所有來源與型態 ---
     print(f"DEBUG: [收訊測試] 來源類型: {getattr(event.source, 'type', 'unknown')}, 訊息類型: {type(event.message)}")
 
     # 徹底阻擋 LINE 私訊：只允許群組 (group)
