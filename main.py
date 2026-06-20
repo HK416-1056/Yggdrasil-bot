@@ -5,7 +5,7 @@ import discord
 import requests
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
-from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.exceptions import InvalidSignatureError, ApiException  # 新增 ApiException 抓取詳細錯誤
 from linebot.v3.messaging import (
     Configuration, 
     ApiClient, 
@@ -14,8 +14,8 @@ from linebot.v3.messaging import (
     PushMessageRequest, 
     TextMessage as LineTextMessage,
     ImageMessage as LineImageMessage,
-    VideoMessage as LineVideoMessage,   # 新增影片訊息模組
-    AudioMessage as LineAudioMessage    # 新增音訊訊息模組
+    VideoMessage as LineVideoMessage,   
+    AudioMessage as LineAudioMessage    
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
 
@@ -29,7 +29,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 LINE_GROUP_ID = os.getenv("LINE_GROUP_ID")
 MESSAGE_CHANNEL_ID = os.getenv("MESSAGE_CHANNEL_ID")  # 指定轉發的 Discord 頻道 ID
 
-# 預設影片預覽圖 (當 Discord 傳送影片時，LINE 需要一張預覽圖)
+# 預設影片預覽圖
 DEFAULT_VIDEO_PREVIEW_URL = "https://via.placeholder.com/1024x768.png?text=Video+Preview"
 
 # --- Discord ---
@@ -51,7 +51,7 @@ async def on_message(message):
     if not message.guild: 
         return 
 
-    # 3. 指定頻道過濾：若有設定特定頻道 ID，則只轉發該頻道的訊息，其餘頻道直接忽略
+    # 3. 指定頻道過濾
     if MESSAGE_CHANNEL_ID and str(message.channel.id) != MESSAGE_CHANNEL_ID:
         return
 
@@ -65,7 +65,7 @@ async def on_message(message):
     elif not message.content and message.attachments:
         messages_to_send.append(LineTextMessage(text=f"[{message.author.display_name}] 傳送了附件:"))
 
-    # --- 處理圖片、影片、音訊與一般附件轉發給 LINE ---
+    # --- 處理附件 ---
     for att in message.attachments:
         content_type = att.content_type or ""
 
@@ -76,23 +76,27 @@ async def on_message(message):
                 preview_image_url=att.url
             ))
             
-        # 類型 2: 影片 (LINE 原生支援 mp4)
+        # 類型 2: 影片 (雙重保險模式：傳送原生影片 + 直接下載網址)
         elif content_type.startswith('video/') and 'mp4' in content_type:
+            # 嘗試使用 LINE 原生影片訊息
             messages_to_send.append(LineVideoMessage(
                 original_content_url=att.url,
                 preview_image_url=DEFAULT_VIDEO_PREVIEW_URL
             ))
+            # 補上直接點擊的網址，避免載入失敗時看不到
+            messages_to_send.append(LineTextMessage(
+                text=f"🎬 [影片附件]: {att.filename}\n🔗 若無法播放，請點此觀看: {att.url}"
+            ))
             
-        # 類型 3: 音檔 (LINE 原生支援 m4a，此處盡力轉換)
+        # 類型 3: 音檔
         elif content_type.startswith('audio/'):
-            # 嘗試抓取語音訊息長度，若無則預設為 60000 毫秒 (60秒)
             duration_ms = getattr(att, 'duration_secs', 60) * 1000
             messages_to_send.append(LineAudioMessage(
                 original_content_url=att.url,
                 duration=int(duration_ms)
             ))
             
-        # 類型 4: 一般檔案 (或 LINE 不支援原生播放的影音格式，如 mkv, zip, pdf)
+        # 類型 4: 一般檔案 (或其他格式)
         else:
             file_message = (
                 f"📁 [附件檔案]: {att.filename}\n"
@@ -115,11 +119,15 @@ async def on_message(message):
                 messages=messages_to_send
             ))
             print("DEBUG: 成功轉發至 LINE 目標對象!")
+    except ApiException as e:
+        # 特別攔截 LINE API 拒絕的詳細原因
+        print(f"❌ [錯誤] LINE API 拒絕了這則訊息！狀態碼: {e.status}")
+        print(f"❌ [錯誤] 詳細原因: {e.body}")
     except Exception as e:
         print(f"DEBUG: Discord 轉 LINE 發生錯誤: {e}")
 
 
-# --- 獨立的背景處理函數 (解決 LINE 重複傳送與延遲問題) ---
+# --- 獨立的背景處理函數 ---
 def forward_text_to_discord(text, user_name):
     requests.post(DISCORD_WEBHOOK, json={
         "content": text, 
@@ -141,20 +149,11 @@ def forward_image_to_discord(message_id, user_name):
         print(f"DEBUG: [背景] LINE 圖片轉發失敗: {e}")
 
 def forward_file_to_discord(message_id, file_name, file_size, user_name):
-    # 檢查檔案大小 (25MB = 26214400 bytes)
     MAX_SIZE = 25 * 1024 * 1024
-    
     if file_size and file_size > MAX_SIZE:
         error_msg = f"⚠️ [{user_name}] 傳送的檔案「{file_name}」超過 25MB 限制，無法轉發至 Discord。"
         print(f"DEBUG: [背景] {error_msg}")
-        
-        # 發送報錯通知到 Discord
-        requests.post(DISCORD_WEBHOOK, json={
-            "content": error_msg, 
-            "username": "系統通知"
-        })
-        
-        # 發送報錯通知回 LINE
+        requests.post(DISCORD_WEBHOOK, json={"content": error_msg, "username": "系統通知"})
         try:
             with ApiClient(configuration) as api_client:
                 line_api = MessagingApi(api_client)
@@ -166,7 +165,6 @@ def forward_file_to_discord(message_id, file_name, file_size, user_name):
             print(f"DEBUG: 傳送錯誤提示回 LINE 失敗: {e}")
         return
 
-    # 下載並轉發檔案
     try:
         print(f"DEBUG: [背景] 準備下載 LINE 檔案 ({file_name})...")
         with ApiClient(configuration) as api_client:
@@ -202,7 +200,6 @@ def callback():
 def handle_message(event):
     print(f"DEBUG: [收訊測試] 來源類型: {getattr(event.source, 'type', 'unknown')}, 訊息類型: {type(event.message)}")
 
-    # 徹底阻擋 LINE 私訊：只允許群組 (group)
     if getattr(event.source, 'type', None) != 'group':
         print(f"DEBUG: 收到 LINE 非群組訊息，已成功濾除。")
         return
@@ -223,7 +220,6 @@ def handle_message(event):
     except Exception:
         pass 
 
-    # 依照訊息類型丟到背景處理
     if isinstance(event.message, TextMessageContent):
         threading.Thread(target=forward_text_to_discord, args=(event.message.text, user_name), daemon=True).start()
 
